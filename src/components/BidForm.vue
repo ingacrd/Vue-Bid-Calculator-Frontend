@@ -25,22 +25,15 @@
     </div>
 
     <div class="flex items-center gap-3">
-      <button
-        type="submit"
-        class="rounded-lg bg-blue-600 text-white px-4 py-2 hover:bg-blue-700"
-        :disabled="loading"
-      >
-        {{ loading ? 'Calculating...' : 'Calculate' }}
-        
-      </button>
-
       <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
+      <p v-else-if="loading" class="text-slate-500 text-sm">Recalculating…</p>
     </div>
   </form>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import debounce from 'lodash.debounce'
 import { calculateBid } from '../api/client'
 import type { BidCalculationResponse, VehicleType } from '../types/bid'
 
@@ -53,17 +46,48 @@ const type = ref<VehicleType>('Common')
 const loading = ref(false)
 const error = ref<string | null>(null)
 
-async function onSubmit() {
+// Abort controller to cancel in-flight fetches
+let currentAbort: AbortController | null = null
+
+async function doCalculate(signal?: AbortSignal) {
+
+  if (!price.value || price.value < 0) {
+    error.value = "Price must be greater than 0"
+    return
+  }
   error.value = null
   loading.value = true
+
   try {
-    console.log("the prices is "+price.value + " the type is " + type.value );
-    const res: BidCalculationResponse = await calculateBid(price.value, type.value)
+    const res = await calculateBid(price.value, type.value, signal)
     emit('calculated', res)
   } catch (e: any) {
-    error.value = e?.message ?? 'Unexpected error'
+    
+    if (e?.name !== 'AbortError') {
+      error.value = e?.message ?? 'Unexpected error'
+    }
   } finally {
     loading.value = false
   }
 }
+
+// Debounce (300 ms).
+const debouncedCalc = debounce(() => {
+  // cancel previous request
+  if (currentAbort) currentAbort.abort()
+  currentAbort = new AbortController()
+  void doCalculate(currentAbort.signal)
+}, 300)
+
+// Recalculate whenever inputs change
+watch([price, type], () => debouncedCalc())
+
+async function onSubmit() {}
+
+// initial calculation on mount
+onMounted(() => {
+  debouncedCalc()
+})
+
+
 </script>
